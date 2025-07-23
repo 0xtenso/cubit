@@ -170,11 +170,15 @@ ext = Extension(
 setup(
     name="cubit",
     # Random metadata. there's more you can supply
-    author="Opentensor Foundation",
-    author_email="cameron@opentensor.ai",
-    url="https://github.com/opentensor/cubit",
-    version="1.2.1",
-    ext_modules=cythonize(ext),
+
+    author = 'Opentensor Foundation',
+    author_email = 'cameron@opentensor.ai',
+    url = 'https://github.com/opentensor/cubit',
+    version = '1.2.2',
+
+    ext_modules = cythonize(ext),
+
+add-release-script
     # Inject our custom trigger
     cmdclass={"build_ext": custom_build_ext},
     # Since the package has c code, the egg cannot be zipped

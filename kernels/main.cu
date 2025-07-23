@@ -1,5 +1,6 @@
 /*
  * The MIT License (MIT)
+ * Copyright (c) 2023 GithubRealFan 
  * Copyright (c) 2022 Cameron Fairchild
  * Copyright (c) 2022 Opentensor Foundation
 
@@ -33,23 +34,25 @@
 #include <ctype.h>
 
 
-__device__ int lt(uint256 a, uint256 b) {
+__device__ bool lt(uint256 a, uint256 b) {
     // Check if a is less than b
     // Assumes a and b are little-endian
     // This is correct for CUDA
     // https://stackoverflow.com/questions/15356622/anyone-know-whether-nvidias-gpus-are-big-or-little-endian
     BYTE* a_ = (BYTE*)a;
     BYTE* b_ = (BYTE*)b;
+    // Note: Requires CUDA TK 11.5 or higher for unsigned __int128
+    // https://developer.nvidia.com/blog/implementing-high-precision-decimal-arithmetic-with-cuda-int128/
+    unsigned __int128* a_128_high = (unsigned __int128*)(a_ + 16);
+    unsigned __int128* b_128_high = (unsigned __int128*)(b_ + 16);
 
-    // Checks in reverse order of the bytes
-    for (int i = 32 - 1; i >= 0; i--) {
-        if (a_[i] < b_[i]) {
-            return -1;
-        } else if (a_[i] > b_[i]) {
-            return 1;
-        }
-    }
-    return 0;
+    unsigned __int128* a_128_low = (unsigned __int128*)a_;
+    unsigned __int128* b_128_low = (unsigned __int128*)b_;
+    
+    bool result = *a_128_high < *b_128_high;
+    result = result || (*a_128_high == *b_128_high && *a_128_low < *b_128_low);
+    
+    return result;
 }
 
 __device__ void sha256(unsigned char* data, unsigned long size, unsigned char* digest) {
@@ -79,8 +82,8 @@ __device__ bool seal_meets_difficulty(BYTE* seal, uint256 limit) {
     }
 
     // Check if the seal number is less than the limit
-    int under_limit = lt((unsigned long*)seal_, limit);
-    return under_limit == -1;
+    bool under_limit = lt((unsigned long*)seal_, limit);
+    return under_limit;
 }
 
 __device__ void create_nonce_bytes(uint64 nonce, BYTE* nonce_bytes) {
@@ -145,10 +148,13 @@ __device__ void create_seal_hash(BYTE* seal, BYTE* block_hash, uint64 nonce) {
 __device__ bool found = false;
 
 // TODO: Use CUDA streams and events to dispatch new blocks and recieve solutions
-__global__ void solve(uint64* solution, uint64 nonce_start, uint64 update_interval, unsigned int n_nonces, uint256 limit, BYTE* block_bytes) {
-    for (uint64 i = blockIdx.x * blockDim.x + threadIdx.x; 
-        i < n_nonces; 
-        i += blockDim.x * gridDim.x) 
+__global__ void solve(uint64* solution, uint64 nonce_start, uint64 update_interval, unsigned int n_nonces, uint256 limit, BYTE* block_bytes)
+{
+    int blockSize = 8;
+    uint64 new_interval = update_interval / blockSize;
+    for (uint64 i = blockIdx.x * blockDim.x + threadIdx.x;
+         i < n_nonces * blockSize;
+         i += blockDim.x * gridDim.x)
     {
         if (found) {
             break;
@@ -160,8 +166,8 @@ __global__ void solve(uint64* solution, uint64 nonce_start, uint64 update_interv
             seal[j] = 0xff;
         }
 
-        uint64 nonce = nonce_start + i * update_interval;
-        for (uint64 j = nonce; j < nonce + update_interval; j++) {
+        uint64 nonce = nonce_start + i * new_interval;
+        for (uint64 j = nonce; j < nonce + new_interval; j++) {
             create_seal_hash(seal, block_bytes, j);
         
             if (seal_meets_difficulty(seal, limit)) {
@@ -175,7 +181,12 @@ __global__ void solve(uint64* solution, uint64 nonce_start, uint64 update_interv
 }
 
 __global__ void test_lt(uint256 a, uint256 b, int* result) {
-    result[0] = lt(a, b);;
+    bool result_ = lt(a, b);
+    if (result_) {
+        result[0] = -1;
+    } else {
+        result[0] = 0;
+    }
 }
 
 __global__ void test_create_nonce_bytes(uint64 nonce, BYTE* nonce_bytes) {
@@ -212,10 +223,9 @@ __global__ void test_seal_meets_difficulty(BYTE* seal, uint256 limit, bool* resu
     *result = seal_meets_difficulty(seal, limit);
 }
 
-void runSolve(int blockSize, uint64* solution, uint64 nonce_start, uint64 update_interval, uint256 limit, BYTE* block_bytes) {
-	int numBlocks = (blockSize + blockSize - 1) / blockSize;
-
-	solve <<< numBlocks, blockSize >>> (solution, nonce_start, update_interval, blockSize, limit, block_bytes);
+void runSolve(int blockSize, uint64 *solution, uint64 nonce_start, uint64 update_interval, uint256 limit, BYTE *block_bytes)
+{
+    solve<<<8, blockSize>>>(solution, nonce_start, update_interval, blockSize, limit, block_bytes);
 }
 
 bool runTestSealMeetsDifficulty(BYTE* seal, uint256 limit) {

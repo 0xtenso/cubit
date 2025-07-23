@@ -6,7 +6,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cubit"
-version = "1.2.1"
+
+version = "1.2.2"
+add-release-script
 description = "A python package for CUDA registration on bittensor. "
 readme = "README.md"
 authors = [{ name = "Opentensor Foundation", email = "cameron@opentensor.ai" }]
